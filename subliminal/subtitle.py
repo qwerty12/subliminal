@@ -4,7 +4,9 @@ import logging
 import os
 
 import chardet
-import pysrt
+
+from pysubs2.formats import autodetect_format
+from pysubs2.exceptions import FormatAutodetectionError
 
 from six import text_type
 
@@ -85,7 +87,7 @@ class Subtitle(object):
         return self.content
 
     def is_valid(self):
-        """Check if a :attr:`text` is a valid SubRip format.
+        """Check if a :attr:`text` is a valid format known by pysubs2.
 
         :return: whether or not the subtitle is valid.
         :rtype: bool
@@ -95,10 +97,10 @@ class Subtitle(object):
             return False
 
         try:
-            pysrt.from_string(self.text, error_handling=pysrt.ERROR_RAISE)
-        except pysrt.Error as e:
-            if e.args[0] < 80:
-                return False
+            autodetect_format(self.text)
+        except FormatAutodetectionError as error:
+            logger.info(str(error))
+            return False
 
         return True
 
