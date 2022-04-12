@@ -80,26 +80,29 @@ class Addic7edProvider(Provider):
         'slk', 'slv', 'spa', 'sqi', 'srp', 'swe', 'tha', 'tur', 'ukr', 'vie', 'zho'
     ]}
     video_types = (Episode,)
-    server_url = 'http://www.addic7ed.com/'
+    domain = "www.addic7ed.com"
+    server_url = 'https://{0}/'.format(domain)
     subtitle_class = Addic7edSubtitle
 
-    def __init__(self, username=None, password=None, phpsessid=None):
+    def __init__(self, username=None, password=None, phpsessid=None, fxcookies=False):
         if any((username, password)) and not all((username, password)):
             raise ConfigurationError('Username and password must be specified')
 
         self.username = username
         self.password = password
         self.phpsessid = phpsessid
+        self.fxcookies = fxcookies
         self.logged_in = False
         self.session = None
 
     def initialize(self):
         self.session = Addic7edSession()
-        self.session.cookies = cookiejar_from_dict({'PHPSESSID': self.phpsessid})
         self.session.headers['User-Agent'] = self.user_agent
 
         # login
-        if self.username and self.password:
+        if self.phpsessid is not None:
+            self.session.cookies = cookiejar_from_dict({'PHPSESSID': self.phpsessid})
+        elif self.username and self.password:
             logger.info('Logging in')
             data = {'username': self.username, 'password': self.password, 'Submit': 'Log in'}
             r = self.session.post(self.server_url + 'dologin.php', data, allow_redirects=False, timeout=10)
@@ -109,6 +112,24 @@ class Addic7edProvider(Provider):
 
             logger.debug('Logged in')
             self.logged_in = True
+        elif self.fxcookies:
+            logger.info('Using cookies from Firefox')
+            from browser_cookie3 import firefox
+            from ..utils import get_firefox_ua
+
+            wanted_cookies = ["PHPSESSID", "wikisubtitlespass", "wikisubtitlesuser"]
+            self.session.cookies = firefox(domain_name=self.domain)
+            for cookie in self.session.cookies:
+                if cookie.name not in wanted_cookies:
+                    self.session.cookies.clear(cookie.domain, cookie.path, cookie.name)
+            if len(self.session.cookies) != len(wanted_cookies):
+                raise AuthenticationError("Could not obtain Addic7ed cookies from Firefox")
+
+            try:
+                self.session.headers['User-Agent'] = get_firefox_ua()
+            except:
+                logger.warn("Unable to determine Firefox's User-Agent: requests will be sent with Subliminal's UA!")
+                pass
 
     def terminate(self):
         # logout
