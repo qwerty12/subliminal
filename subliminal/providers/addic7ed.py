@@ -81,7 +81,7 @@ class Addic7edProvider(Provider):
     ]}
     video_types = (Episode,)
     domain = "www.addic7ed.com"
-    server_url = 'https://{0}/'.format(domain)
+    server_url = f'https://{domain}/'
     subtitle_class = Addic7edSubtitle
 
     def __init__(self, username=None, password=None, phpsessid=None, fxcookies=False):
@@ -129,7 +129,6 @@ class Addic7edProvider(Provider):
                 self.session.headers['User-Agent'] = get_firefox_ua()
             except:
                 logger.warn("Unable to determine Firefox's User-Agent: requests will be sent with Subliminal's UA!")
-                pass
 
     def terminate(self):
         # logout
