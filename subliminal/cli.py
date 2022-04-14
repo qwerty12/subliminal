@@ -4,6 +4,8 @@ Subliminal uses `click <http://click.pocoo.org>`_ to provide a powerful :abbr:`C
 
 """
 from __future__ import division
+
+import sys
 from collections import defaultdict
 from datetime import timedelta
 import glob
@@ -20,7 +22,7 @@ from dogpile.util.readwrite_lock import ReadWriteMutex
 from six.moves import configparser
 
 from subliminal import (AsyncProviderPool, Episode, Movie, Video, __version__, check_video, compute_score, get_scores,
-                        provider_manager, refine, refiner_manager, region, save_subtitles, scan_video, scan_videos)
+                        provider_manager, refine, refiner_manager, region, save_subtitles, scan_video, scan_videos, curl)
 from subliminal.core import ARCHIVE_EXTENSIONS, search_external_subtitles
 
 logger = logging.getLogger(__name__)
@@ -267,6 +269,8 @@ def subliminal(ctx, addic7ed_session, addic7ed_fxcookies, legendastv, opensubtit
         handler.setFormatter(logging.Formatter(logging.BASIC_FORMAT))
         logging.getLogger('subliminal').addHandler(handler)
         logging.getLogger('subliminal').setLevel(logging.DEBUG)
+
+    curl.curl_init(os.path.join(os.path.dirname(__file__), "curl", "libcurl-impersonate-ff-4.dll"))
 
     ctx.obj = {
         'provider_configs': {},

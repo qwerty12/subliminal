@@ -1,16 +1,21 @@
 # -*- coding: utf-8 -*-
+import libcurl as lcurl
 import logging
 import re
 import time
 
 from babelfish import Language, language_converters
+from ctypes import c_char, POINTER
 from guessit import guessit
-from requests import Session
-from requests.utils import cookiejar_from_dict
+from requests import Timeout
+from requests.utils import dict_from_cookiejar
+from types import SimpleNamespace
+from urllib.parse import urlencode
 
 from . import ParserBeautifulSoup, Provider
 from ..cache import SHOW_EXPIRATION_TIME, region
-from ..exceptions import AuthenticationError, ConfigurationError, DownloadLimitExceeded
+from ..curl import curl_write_function, curl_easy_impersonate, curl_raise_for_status, basic_resp_header_parser, curl_get_content_type
+from ..exceptions import AuthenticationError, DownloadLimitExceeded, ProviderError, ServiceUnavailable
 from ..matches import guess_matches
 from ..subtitle import Subtitle, fix_line_ending
 from ..utils import sanitize
@@ -87,35 +92,103 @@ class Addic7edProvider(Provider):
     def __init__(self, phpsessid=None, fxcookies=False):
         self.phpsessid = phpsessid
         self.fxcookies = fxcookies
+        self.cookie_string = ""
         self.session = None
+        self.curl_reqheader_chunk = None
+        self.curl_error_buffer = (c_char * lcurl.CURL_ERROR_SIZE)()
+        self.curl_data_buffer = bytearray(b"")
+        self.curl_header_buffer = bytearray(b"")
+        self.last_request = 0
 
     def initialize(self):
-        self.session = Addic7edSession()
-        self.session.headers['User-Agent'] = self.user_agent
-
         # login
         if self.phpsessid is not None:
-            self.session.cookies = cookiejar_from_dict({'PHPSESSID': self.phpsessid})
+            self.cookie_string = 'PHPSESSID=' + self.phpsessid
         elif self.fxcookies:
             logger.info('Using cookies from Firefox')
             from browser_cookie3 import firefox
             from ..utils import get_firefox_ua
 
-            wanted_cookies = ["PHPSESSID", "wikisubtitlespass", "wikisubtitlesuser"]
-            self.session.cookies = firefox(domain_name=self.domain)
-            for cookie in self.session.cookies:
-                if cookie.name not in wanted_cookies:
-                    self.session.cookies.clear(cookie.domain, cookie.path, cookie.name)
-            if len(self.session.cookies) != len(wanted_cookies):
-                raise AuthenticationError("Could not obtain Addic7ed cookies from Firefox")
+            try:
+                cookies = firefox(domain_name=self.domain)
+                cookies = dict_from_cookiejar(cookies)
+                # preserve Firefox order
+                for wanted_cookie_name in ["wikisubtitlesuser", "wikisubtitlespass", "PHPSESSID"]:
+                    self.cookie_string += f'{wanted_cookie_name}={cookies[wanted_cookie_name]}; '
+            except Exception as e:
+                raise AuthenticationError("Could not obtain Addic7ed cookies from Firefox: " + repr(e))
 
             try:
-                self.session.headers['User-Agent'] = get_firefox_ua()
+                self.user_agent = get_firefox_ua()
             except:
                 logger.warn("Unable to determine Firefox's User-Agent: requests will be sent with Subliminal's UA!")
 
+        self._curl_initialize()
+
+    def _curl_initialize(self):
+        self.session: POINTER(lcurl.CURL) = lcurl.easy_init()
+        if not self.session:
+            raise ProviderError("Unable to initialize cURL")
+        lcurl.easy_setopt(self.session, lcurl.CURLOPT_ERRORBUFFER, self.curl_error_buffer)
+        lcurl.easy_setopt(self.session, lcurl.CURLOPT_WRITEFUNCTION, curl_write_function)
+        lcurl.easy_setopt(self.session, lcurl.CURLOPT_WRITEDATA, id(self.curl_data_buffer))
+        lcurl.easy_setopt(self.session, lcurl.CURLOPT_FOLLOWLOCATION, 1)  # Mirror Requests - mostly
+        #lcurl.easy_setopt(self.session, lcurl.CURLOPT_CONNECTTIMEOUT, 30)
+        lcurl.easy_setopt(self.session, lcurl.CURLOPT_TIMEOUT, 30)
+        if self.cookie_string and len(self.cookie_string) > 0:
+            self.cookie_string = self.cookie_string.strip("; ") # Fx does not send a cookie string with a terminating semicolon
+            lcurl.easy_setopt(self.session, lcurl.CURLOPT_COOKIE, self.cookie_string.encode("utf-8"))
+        lcurl.easy_setopt(self.session, lcurl.CURLOPT_REFERER, self.server_url.encode("utf-8"))
+        self.curl_reqheader_chunk = POINTER(lcurl.slist)()
+        self.curl_reqheader_chunk = lcurl.slist_append(self.curl_reqheader_chunk, "Connection: keep-alive".encode("utf-8"))
+        self.curl_reqheader_chunk = lcurl.slist_append(self.curl_reqheader_chunk, "User-Agent: {0}".format(self.user_agent).encode("utf-8"))
+        lcurl.easy_setopt(self.session, lcurl.CURLOPT_HTTPHEADER, self.curl_reqheader_chunk)
+        lcurl.easy_setopt(self.session, lcurl.CURLOPT_ACCEPT_ENCODING, "gzip, deflate, br".encode("utf-8")) # enable cURL automatic decompression...
+        curl_easy_impersonate(self.session, "ff98") #... even though this sets Accept-Encoding
+
+    def _curl_make_request(self, url, params=None, store_resp_headers=False):
+        if time.time() < self.last_request + 5:
+            time.sleep(5)
+        self.last_request = time.time()
+
+        if params is not None:
+            if not url.endswith("?"):
+                url += "?"
+            url += urlencode(params, doseq=True)
+
+        lcurl.easy_setopt(self.session, lcurl.CURLOPT_URL, url.encode("utf-8"))
+        if not store_resp_headers:
+            lcurl.easy_setopt(self.session, lcurl.CURLOPT_HEADERFUNCTION, None)
+            lcurl.easy_setopt(self.session, lcurl.CURLOPT_HEADERDATA, None)
+        else:
+            lcurl.easy_setopt(self.session, lcurl.CURLOPT_HEADERFUNCTION, curl_write_function)
+            lcurl.easy_setopt(self.session, lcurl.CURLOPT_HEADERDATA, id(self.curl_header_buffer))
+            self.curl_header_buffer.clear()
+
+        self.curl_data_buffer.clear()
+        res: lcurl.CURLcode = lcurl.easy_perform(self.session)
+        if res != lcurl.CURLE_OK:
+            logger.error("Failed to get '%s': [%d] %s", url, res, self.curl_error_buffer.raw.decode("utf-8"))
+            if res == lcurl.CURLE_OPERATION_TIMEDOUT:
+                raise Timeout()
+
+        if not store_resp_headers:
+            details = None
+            curl_raise_for_status(self.session, url)
+        else:
+            details = basic_resp_header_parser(bytes(self.curl_header_buffer))
+            curl_raise_for_status(self.session, url, details.request_line)
+
+        return SimpleNamespace(content=bytes(self.curl_data_buffer), details=details)
+
     def terminate(self):
-        self.session.close()
+        if self.curl_reqheader_chunk is not None:
+            lcurl.slist_free_all(self.curl_reqheader_chunk)
+            self.curl_reqheader_chunk = None
+
+        if self.session is not None:
+            lcurl.easy_cleanup(self.session)
+            self.session = None
 
     @region.cache_on_arguments(expiration_time=SHOW_EXPIRATION_TIME)
     def _get_show_ids(self):
@@ -127,8 +200,7 @@ class Addic7edProvider(Provider):
         """
         # get the show page
         logger.info('Getting show ids')
-        r = self.session.get(self.server_url + 'shows.php', timeout=10)
-        r.raise_for_status()
+        r = self._curl_make_request(self.server_url + 'shows.php')
 
         soup = ParserBeautifulSoup(r.content, ['html.parser'])
 
@@ -160,8 +232,7 @@ class Addic7edProvider(Provider):
 
         # make the search
         logger.info('Searching show ids with %r', params)
-        r = self.session.get(self.server_url + 'srch.php', params=params, timeout=10)
-        r.raise_for_status()
+        r = self._curl_make_request(self.server_url + 'srch.php', params)
         soup = ParserBeautifulSoup(r.content, ['lxml', 'html.parser'])
 
         # get the suggestion
@@ -220,14 +291,17 @@ class Addic7edProvider(Provider):
     def query(self, show_id, series, season, year=None, country=None):
         # get the page of the season of the show
         logger.info('Getting the page of show id %d, season %d', show_id, season)
-        r = self.session.get(self.server_url + 'show/%d' % show_id, params={'season': season}, timeout=10)
-        r.raise_for_status()
+        r = self._curl_make_request(self.server_url + 'show/%d' % show_id, {'season': season})
 
-        if not r.content:
+        if not r.content or len(r.content) == 0:
             # Provider returns a status of 304 Not Modified with an empty content
             # raise_for_status won't raise exception for that status code
             logger.debug('No data returned from provider')
             return []
+
+        err = b"Server too busy. Please try again later."
+        if r.content.endswith(err):
+            raise ServiceUnavailable(err)
 
         soup = ParserBeautifulSoup(r.content, ['lxml', 'html.parser'])
 
@@ -285,28 +359,17 @@ class Addic7edProvider(Provider):
     def download_subtitle(self, subtitle):
         # download the subtitle
         logger.info('Downloading subtitle %r', subtitle)
-        r = self.session.get(self.server_url + subtitle.download_link, headers={'Referer': subtitle.page_link},
-                             timeout=10)
-        r.raise_for_status()
+        r = self._curl_make_request(self.server_url + subtitle.download_link)
 
-        if not r.content:
+        if not r.content or len(r.content) == 0:
             # Provider returns a status of 304 Not Modified with an empty content
             # raise_for_status won't raise exception for that status code
             logger.debug('Unable to download subtitle. No data returned from provider')
             return
 
         # detect download limit exceeded
-        if r.headers['Content-Type'] == 'text/html':
+        if curl_get_content_type(self.session).startswith('text/html'):
             raise DownloadLimitExceeded
 
         subtitle.content = fix_line_ending(r.content)
 
-
-class Addic7edSession(Session):
-    last_request = 0
-
-    def request(self, *args, **kwargs):
-        if time.time() < self.last_request + 5:
-            time.sleep(5)
-        self.last_request = time.time()
-        return super().request(*args, **kwargs)
