@@ -237,7 +237,6 @@ config_file = 'config.ini'
 
 @click.group(context_settings={'max_content_width': 100}, epilog='Suggestions and bug reports are greatly appreciated: '
              'https://github.com/Diaoul/subliminal/')
-@click.option('--addic7ed', type=click.STRING, nargs=2, metavar='USERNAME PASSWORD', help='Addic7ed configuration.')
 @click.option('--addic7ed-session', type=click.STRING, nargs=1, metavar='SESSION', help='Addic7ed session.')
 @click.option('--addic7ed-fxcookies', is_flag=True, default=False, help='Pull cookies for Addic7ed from Firefox.')
 @click.option('--legendastv', type=click.STRING, nargs=2, metavar='USERNAME PASSWORD', help='LegendasTV configuration.')
@@ -249,7 +248,7 @@ config_file = 'config.ini'
 @click.option('--debug', is_flag=True, help='Print useful information for debugging subliminal and for reporting bugs.')
 @click.version_option(__version__)
 @click.pass_context
-def subliminal(ctx, addic7ed, addic7ed_session, addic7ed_fxcookies, legendastv, opensubtitles, omdb, cache_dir, debug):
+def subliminal(ctx, addic7ed_session, addic7ed_fxcookies, legendastv, opensubtitles, omdb, cache_dir, debug):
     """Subtitles, faster than your thoughts."""
     # create cache directory
     try:
@@ -277,8 +276,6 @@ def subliminal(ctx, addic7ed, addic7ed_session, addic7ed_fxcookies, legendastv, 
     # provider configs
     if addic7ed_session:
         ctx.obj['provider_configs']['addic7ed'] = {'phpsessid': addic7ed_session}
-    elif addic7ed:
-        ctx.obj['provider_configs']['addic7ed'] = {'username': addic7ed[0], 'password': addic7ed[1]}
     elif addic7ed_fxcookies:
         ctx.obj['provider_configs']['addic7ed'] = {'fxcookies': addic7ed_fxcookies}
     if legendastv:

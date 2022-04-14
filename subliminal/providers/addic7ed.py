@@ -84,15 +84,9 @@ class Addic7edProvider(Provider):
     server_url = f'https://{domain}/'
     subtitle_class = Addic7edSubtitle
 
-    def __init__(self, username=None, password=None, phpsessid=None, fxcookies=False):
-        if any((username, password)) and not all((username, password)):
-            raise ConfigurationError('Username and password must be specified')
-
-        self.username = username
-        self.password = password
+    def __init__(self, phpsessid=None, fxcookies=False):
         self.phpsessid = phpsessid
         self.fxcookies = fxcookies
-        self.logged_in = False
         self.session = None
 
     def initialize(self):
@@ -102,16 +96,6 @@ class Addic7edProvider(Provider):
         # login
         if self.phpsessid is not None:
             self.session.cookies = cookiejar_from_dict({'PHPSESSID': self.phpsessid})
-        elif self.username and self.password:
-            logger.info('Logging in')
-            data = {'username': self.username, 'password': self.password, 'Submit': 'Log in'}
-            r = self.session.post(self.server_url + 'dologin.php', data, allow_redirects=False, timeout=10)
-
-            if r.status_code != 302:
-                raise AuthenticationError(self.username)
-
-            logger.debug('Logged in')
-            self.logged_in = True
         elif self.fxcookies:
             logger.info('Using cookies from Firefox')
             from browser_cookie3 import firefox
@@ -131,14 +115,6 @@ class Addic7edProvider(Provider):
                 logger.warn("Unable to determine Firefox's User-Agent: requests will be sent with Subliminal's UA!")
 
     def terminate(self):
-        # logout
-        if self.logged_in:
-            logger.info('Logging out')
-            r = self.session.get(self.server_url + 'logout.php', timeout=10)
-            r.raise_for_status()
-            logger.debug('Logged out')
-            self.logged_in = False
-
         self.session.close()
 
     @region.cache_on_arguments(expiration_time=SHOW_EXPIRATION_TIME)
