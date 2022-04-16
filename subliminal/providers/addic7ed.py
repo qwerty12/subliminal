@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import libcurl as lcurl
 import logging
+import os
 import re
 import time
 
@@ -129,6 +130,8 @@ class Addic7edProvider(Provider):
         self.session: POINTER(lcurl.CURL) = lcurl.easy_init()
         if not self.session:
             raise ProviderError("Unable to initialize cURL")
+        if "SSL_CERT_FILE" in os.environ:
+            lcurl.easy_setopt(self.session, lcurl.CURLOPT_CAINFO, os.environ["SSL_CERT_FILE"].encode("utf-8"))
         lcurl.easy_setopt(self.session, lcurl.CURLOPT_ERRORBUFFER, self.curl_error_buffer)
         lcurl.easy_setopt(self.session, lcurl.CURLOPT_WRITEFUNCTION, curl_write_function)
         lcurl.easy_setopt(self.session, lcurl.CURLOPT_WRITEDATA, id(self.curl_data_buffer))

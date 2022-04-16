@@ -10,8 +10,11 @@ def curl_init(dll_fullpath):
     # TODO: find a place to call lcurl.global_cleanup()
     if dll_fullpath is not None:
         # TODO: Not ideal for security reasons, but NSS won't load the rest of its modules without this
-        os.environ.pop('SSL_CERT_FILE', None)
-        os.environ["PATH"] = os.path.dirname(dll_fullpath) + os.pathsep + os.environ["PATH"]
+        dn = os.path.dirname(dll_fullpath)
+        os.environ["PATH"] = dn + os.pathsep + os.environ["PATH"]
+        if "SSL_CERT_FILE" in os.environ:
+            if not os.path.isfile(os.path.join(dn, "nsspem.dll")):
+                del os.environ["SSL_CERT_FILE"]
     lcurl.config(LIBCURL=dll_fullpath)
     lcurl.global_init(lcurl.CURL_GLOBAL_DEFAULT)
 
