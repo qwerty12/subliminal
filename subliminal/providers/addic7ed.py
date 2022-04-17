@@ -146,8 +146,7 @@ class Addic7edProvider(Provider):
         self.curl_reqheader_chunk = lcurl.slist_append(self.curl_reqheader_chunk, "Connection: keep-alive".encode("utf-8"))
         self.curl_reqheader_chunk = lcurl.slist_append(self.curl_reqheader_chunk, "User-Agent: {0}".format(self.user_agent).encode("utf-8"))
         lcurl.easy_setopt(self.session, lcurl.CURLOPT_HTTPHEADER, self.curl_reqheader_chunk)
-        lcurl.easy_setopt(self.session, lcurl.CURLOPT_ACCEPT_ENCODING, "gzip, deflate, br".encode("utf-8")) # enable cURL automatic decompression...
-        curl_easy_impersonate(self.session, "ff98") #... even though this sets Accept-Encoding
+        curl_easy_impersonate(self.session, "ff98")
 
     def _curl_make_request(self, url, params=None, store_resp_headers=False):
         if time.time() < self.last_request + 5:
