@@ -1,0 +1,28 @@
+diff --git a/src/prsa.c b/src/prsa.c
+index f18c0ab..da19ba5 100644
+--- a/src/prsa.c
++++ b/src/prsa.c
+@@ -48,6 +48,9 @@
+ #include <secdert.h>
+ #include <secoid.h>
+ 
++SEC_ASN1_MKSUB(SEC_AnyTemplate)
++SEC_ASN1_MKSUB(SECOID_AlgorithmIDTemplate)
++
+ #define SSL3_SHAMD5_HASH_SIZE  36       /* LEN_MD5 (16) + LEN_SHA1 (20) */
+ 
+ #ifdef HAVE_LOWKEYTI_H
+diff --git a/src/ptoken.c b/src/ptoken.c
+index 371dcdf..c928101 100644
+--- a/src/ptoken.c
++++ b/src/ptoken.c
+@@ -233,6 +233,9 @@ pem_mdToken_GetLoginRequired
+     fwSlot = NSSCKFWToken_GetFWSlot(fwToken);
+     slotID = NSSCKFWSlot_GetSlotID(fwSlot);
+ 
++    if (slotID <= 0 || slotID - 1 >= NUM_SLOTS)
++        return CK_FALSE;
++
+     label = pem_mdToken_GetLabel(mdToken, fwToken, mdInstance, fwInstance,
+                              &pError);
+ 

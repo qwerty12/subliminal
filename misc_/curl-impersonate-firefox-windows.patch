@@ -1,0 +1,248 @@
+diff --git a/Makefile.in b/Makefile.in
+index 877c54f..d0d767f 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -28,7 +28,7 @@ nghttp2_install_dir := $(abspath $(NGHTTP2_VERSION)/installed)
+ nghttp2_static_libs := $(nghttp2_install_dir)/lib/libnghttp2.a
+ 
+ # Dependencies needed to compile the Firefox version
+-firefox_libs := $(brotli_static_libs) $(nss_static_libs) $(nghttp2_static_libs)
++firefox_libs := 
+ # Dependencies needed to compile the Chrome version
+ chrome_libs := $(brotli_static_libs) $(boringssl_static_libs) $(nghttp2_static_libs)
+ 
+@@ -67,7 +67,7 @@ help: ## Show this help message
+ firefox-build: $(CURL_VERSION)/.firefox ## Build the Firefox version of curl-impersonate
+ 	cd $(CURL_VERSION)
+ 	# Don't pass this Makefile's MAKEFLAGS
+-	$(MAKE) MAKEFLAGS=
++	$(MAKE) -j4 MAKEFLAGS=
+ .PHONY: firefox-build
+ 
+ firefox-checkbuild: ## Run basic checks on the built binary
+@@ -335,6 +335,7 @@ $(CURL_VERSION)/.patched-ff: $(srcdir)/firefox/patches/curl-*.patch
+ 	tar -xf $(CURL_VERSION).tar.xz
+ 	cd $(CURL_VERSION)
+ 	for p in $^; do patch -p1 < $$p; done
++	sed -i 's/AC_CHECK_HEADER(pthread.h/AC_CHECK_HEADER(no_libwinpthread_use_winapi_threading.h/' configure.ac
+ 	# Re-generate the configure script
+ 	autoreconf -fi
+ 	touch .patched-ff
+@@ -360,9 +361,15 @@ $(CURL_VERSION)/.firefox: $(firefox_libs) $(CURL_VERSION).tar.xz $(CURL_VERSION)
+ 	# (for cross compilation), then pass it on to curl.
+ 	{ \
+ 	  config_flags="--prefix=@prefix@"; \
+-	  config_flags+=" --with-nghttp2=$(nghttp2_install_dir)"; \
+-	  config_flags+=" --with-brotli=$(brotli_install_dir)"; \
+-	  config_flags+=" --with-nss=$(nss_install_dir) --with-nss-deprecated"; \
++	  config_flags+=" --with-nghttp2=${MINGW_PREFIX}"; \
++	  config_flags+=" --with-brotli=${MINGW_PREFIX}"; \
++	  config_flags+=" --with-nss=${MINGW_PREFIX} --with-nss-deprecated"; \
++	  config_flags+=" --with-default-ssl-backend=nss"; \
++	  config_flags+=" --without-openssl"; \
++	  config_flags+=" --without-zstd"; \
++	  config_flags+=" --with-winidn"; \
++	  config_flags+=" --with-ldap-lib=wldap32"; \
++	  config_flags+=" --without-libpsl"; \
+ 	  config_flags+=" USE_CURL_SSLKEYLOGFILE=true"; \
+ 	  if test "$(static_build)" = "yes"; then \
+ 	    config_flags+=" --enable-static --disable-shared"; \
+@@ -378,8 +385,9 @@ $(CURL_VERSION)/.firefox: $(firefox_libs) $(CURL_VERSION).tar.xz $(CURL_VERSION)
+ 	  if test -n "$(with_libnssckbi)"; then \
+ 		config_flags+=" --with-libnssckbi=$(with_libnssckbi)"; \
+ 	  fi; \
+-	  add_cflags="-I$(nss_install_dir)/../public/nss"; \
+-	  add_cflags+=" -I$(nss_install_dir)/include/nspr"; \
++	  add_cflags="-march=x86-64 -mtune=generic"; \
++	  add_cflags+=" -O2"; \
++	  add_cflags+=" -pipe"; \
+ 	}
+ 
+ 	echo "Configuring curl with: $$config_flags"
+diff --git a/firefox/patches/curl-impersonate.patch b/firefox/patches/curl-impersonate.patch
+index 88091e3..158be40 100644
+--- a/firefox/patches/curl-impersonate.patch
++++ b/firefox/patches/curl-impersonate.patch
+@@ -22,29 +22,6 @@ diff --git a/configure.ac b/configure.ac
+ index de2dee5a4..d2cbe4ee1 100644
+ --- a/configure.ac
+ +++ b/configure.ac
+-@@ -1331,7 +1331,8 @@ if test X"$OPT_BROTLI" != Xno; then
+- 
+-   dnl if given with a prefix, we set -L and -I based on that
+-   if test -n "$PREFIX_BROTLI"; then
+--    LIB_BROTLI="-lbrotlidec"
+-+    # curl-impersonate: Use static libbrotli
+-+    LIB_BROTLI="-lbrotlidec-static -lbrotlicommon-static"
+-     LD_BROTLI=-L${PREFIX_BROTLI}/lib$libsuff
+-     CPP_BROTLI=-I${PREFIX_BROTLI}/include
+-     DIR_BROTLI=${PREFIX_BROTLI}/lib$libsuff
+-@@ -1341,7 +1342,11 @@ if test X"$OPT_BROTLI" != Xno; then
+-   CPPFLAGS="$CPPFLAGS $CPP_BROTLI"
+-   LIBS="$LIB_BROTLI $LIBS"
+- 
+--  AC_CHECK_LIB(brotlidec, BrotliDecoderDecompress)
+-+  AC_CHECK_LIB(brotlidec, BrotliDecoderDecompress,
+-+    # curl-impersonate: Define 'action-if-found' explicitly to prevent
+-+    # -lbrotlidec from being added to LIBS (already added before)
+-+    AC_DEFINE(HAVE_LIBBROTLI, 1, [Define to 1 if libbrotli exists])
+-+  )
+- 
+-   AC_CHECK_HEADERS(brotli/decode.h,
+-     curl_brotli_msg="enabled (libbrotlidec)"
+ @@ -4426,8 +4431,8 @@ AC_CONFIG_FILES([Makefile \
+             tests/unit/Makefile \
+             packages/Makefile \
+@@ -1284,151 +1261,15 @@ diff --git a/m4/curl-nss.m4 b/m4/curl-nss.m4
+ index cb162755d..13ee571aa 100644
+ --- a/m4/curl-nss.m4
+ +++ b/m4/curl-nss.m4
+-@@ -76,7 +76,123 @@ if test "x$OPT_NSS" != xno; then
+-       # Without pkg-config, we'll kludge in some defaults
+-       AC_MSG_WARN([Using hard-wired libraries and compilation flags for NSS.])
+-       addld="-L$OPT_NSS/lib"
+--      addlib="-lssl3 -lsmime3 -lnss3 -lplds4 -lplc4 -lnspr4"
+-+
+-+      # curl-impersonate: Link NSS statically.
+-+      # NSS is poorly documented in this regard and a lot of trial and error
+-+      # was made to come up with the correct list of linking flags. The
+-+      # libraries have circular dependencies which makes their order extremely
+-+      # difficult to find out.
+-+
+-+      # Some references:
+-+      # https://github.com/mozilla/application-services/blob/b2690fd2e4cc3e8e10b6868ab0de8b79c89d3a93/components/support/rc_crypto/nss/nss_build_common/src/lib.rs#L94
+-+      # and
+-+      # https://hg.mozilla.org/mozilla-central/file/tip/security/nss/lib/freebl/freebl.gyp
+-+
+-+      # On Linux we can use special linker flags to force static linking
+-+      # (-l:libplc4.a etc.), otherwise the linker will prefer to use
+-+      # libplc4.so. On other systems the dynamic libraries would have to be
+-+      # removed manually from the NSS directory before building curl.
+-+      case $host_os in
+-+        linux*)
+-+          addlib="-lssl -lnss_static -lpk11wrap_static -lcertdb -lcerthi -lnsspki -lnssdev -lsoftokn_static -lfreebl_static -lnssutil -lnssb -lcryptohi -l:libplc4.a -l:libplds4.a -l:libnspr4.a -lsqlite"
+-+          ;;
+-+        darwin*)
+-+          addlib="-lssl -lnss_static -lpk11wrap_static -lcertdb -lcerthi -lnsspki -lnssdev -lsoftokn_static -lfreebl_static -lnssutil -lnssb -lcryptohi -lplc4 -lplds4 -lnspr4"
+-+          ;;
+-+        *)
+-+          addlib="-lssl -lnss_static -lpk11wrap_static -lcertdb -lcerthi -lnsspki -lnssdev -lsoftokn_static -lfreebl_static -lnssutil -lnssb -lcryptohi -lplc4 -lplds4 -lnspr4 -lsqlite"
+-+          ;;
+-+      esac
+-+
+-+      case $host_cpu in
+-+        arm)
+-+          addlib="$addlib -larmv8_c_lib"
+-+          ;;
+-+        aarch64)
+-+          addlib="$addlib -larmv8_c_lib -lgcm-aes-aarch64_c_lib"
+-+          ;;
+-+        x86)
+-+          addlib="$addlib -lgcm-aes-x86_c_lib"
+-+          ;;
+-+        x86_64)
+-+          addlib="$addlib -lgcm-aes-x86_c_lib -lhw-acc-crypto-avx -lhw-acc-crypto-avx2 -lsha-x86_c_lib"
+-+          case $host_os in
+-+            linux*)
+-+              addlib="$addlib -lintel-gcm-wrap_c_lib -lintel-gcm-s_lib"
+-+              ;;
+-+          esac
+-+          ;;
+-+      esac
+-+
+-+      # curl-impersonate:
+-+      # On Linux these linker flags are necessary to resolve
+-+      # the symbol mess and circular dependencies of NSS .a libraries
+-+      # to make the AC_CHECK_LIB test below pass.
+-+      case $host_os in
+-+        linux*)
+-+          addlib="-Wl,--start-group $addlib -Wl,--end-group"
+-+          ;;
+-+      esac
+-+
+-+      # External dependencies for nss
+-+      case $host_os in
+-+        linux*)
+-+          addlib="$addlib -pthread -ldl"
+-+          ;;
+-+        darwin*)
+-+          addlib="$addlib -lsqlite3"
+-+          ;;
+-+      esac
+-+
+-+      # Attempt to locate libnssckbi.
+-+      # This library file contains the trusted certificates and nss loads it
+-+      # at runtime using dlopen. If it's not in a path findable by dlopen
+-+      # we have to add that path explicitly using -rpath so it may find it.
+-+      # On Ubuntu and Mac M1 it is in a non-standard location.
+-+      AC_ARG_WITH(libnssckbi,
+-+        [AS_HELP_STRING([--with-libnssckbi=DIRECTORY],
+-+                       [Path where libnssckbi can be found when using NSS])],
+-+        [AS_IF(
+-+          [test x"$withval" = xyes],
+-+          [nssckbi_path="check"],
+-+          [nssckbi_path="$withval"])],
+-+        [nssckbi_path="check"])
+-+
+-+      AS_IF(
+-+        [test "x$nssckbi_path" = xno],
+-+        [],
+-+        [test "x$nssckbi_path" != xcheck],
+-+        [addld="$addld -Wl,-rpath,$nssckbi_path"],
+-+        [
+-+          AC_MSG_CHECKING([if libnssckbi is in a non-standard location])
+-+          case $host_os in
+-+            linux*)
+-+              search_paths="/usr/lib/$host /usr/lib/$host/nss"
+-+              search_paths="$search_paths /usr/lib/$host_cpu-$host_os"
+-+              search_paths="$search_paths /usr/lib/$host_cpu-$host_os/nss"
+-+              search_ext="so"
+-+              ;;
+-+            darwin*)
+-+              search_paths="/opt/homebrew/lib"
+-+              search_ext="dylib"
+-+              ;;
+-+          esac
+-+
+-+          found="no"
+-+          for path in $search_paths; do
+-+            if test -f "$path/libnssckbi.$search_ext"; then
+-+              AC_MSG_RESULT([$path])
+-+              addld="$addld -Wl,-rpath,$path"
+-+              found="yes"
+-+              break
+-+            fi
+-+          done
+-+
+-+          if test "$found" = "no"; then
+-+            AC_MSG_RESULT([no])
+-+          fi
+-+        ])
+-+
+-       addcflags="-I$OPT_NSS/include"
+-       version="unknown"
+-       nssprefix=$OPT_NSS
+ @@ -93,7 +209,7 @@ if test "x$OPT_NSS" != xno; then
+      fi
+  
+      dnl The function SSL_VersionRangeSet() is needed to enable TLS > 1.0
+ -    AC_CHECK_LIB(nss3, SSL_VersionRangeSet,
+-+    AC_CHECK_LIB(nss_static, SSL_VersionRangeSet,
+++    AC_CHECK_LIB(ssl3, SSL_VersionRangeSet,
+       [
+       AC_DEFINE(USE_NSS, 1, [if NSS is enabled])
+       AC_SUBST(USE_NSS, [1])
+-@@ -103,9 +219,7 @@ if test "x$OPT_NSS" != xno; then
+-      test nss != "$DEFAULT_SSL_BACKEND" || VALID_DEFAULT_SSL_BACKEND=yes
+-      ],
+-      [
+--       LDFLAGS="$CLEANLDFLAGS"
+--       LIBS="$CLEANLIBS"
+--       CPPFLAGS="$CLEANCPPFLAGS"
+-+       AC_MSG_ERROR([Failed linking NSS statically])
+-      ])
+- 
+-     if test "x$USE_NSS" = "xyes"; then
+ diff --git a/src/Makefile.am b/src/Makefile.am
+ index 706f0aac3..0ad94622e 100644
+ --- a/src/Makefile.am
