@@ -19,15 +19,17 @@ def curl_init(dll_fullpath):
     lcurl.global_init(lcurl.CURL_GLOBAL_DEFAULT)
 
 
-def curl_easy_impersonate(data, target):
+def curl_easy_impersonate(data, target, default_headers):
     try:
         easy_impersonate = ct.WINFUNCTYPE(lcurl._curl.CURLcode,
                             ct.POINTER(lcurl._curl.CURL),
-                            ct.c_char_p)(
+                            ct.c_char_p,
+                            ct.c_int)(
                             ("curl_easy_impersonate", lcurl._dll.dll), (
                             (1, "data"),
-                            (1, "target"),))
-        return easy_impersonate(data, target.encode('utf-8'))
+                            (1, "target"),
+                            (1, "default_headers"),))
+        return easy_impersonate(data, target.encode('utf-8'), default_headers)
     except AttributeError:
         # Provided libcurl lacks impersonation support; try https://github.com/lwthiker/curl-impersonate
         return lcurl.CURLE_NOT_BUILT_IN
